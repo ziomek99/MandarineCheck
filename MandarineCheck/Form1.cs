@@ -80,6 +80,7 @@ namespace MandarineCheck
             imgOriginal = new Image<Bgr, Byte>(openFileDialog1.FileName);
             imOriginalView.Image = imgOriginal;
             doProcessing();
+            //doKMeansProcessing();
             //imOriginalView.Image = drawCircles(imgProcessed, imgOriginal);
 
             /*
@@ -105,18 +106,47 @@ namespace MandarineCheck
         void doProcessing()
         {
             Image<Gray, Byte> imgProcessing;
-
+            int nrOfLeaves = 0;
             try
             {
+                //Copying image to process
                 imgProcessing = preProcessImage(imgOriginal);
                 imgOriginal.Draw(findContours(imgProcessing), new Bgr(Color.Red), 3);
+                nrOfLeaves = countLeafContours(imgProcessing);
                 imProcessedView.Image = distinguishObjects(imgProcessing);
+
+                //counting leaves
+                if (nrOfLeaves == 1)
+                    shoutBox.AppendText("(1 leaf)\n");
+                else if (nrOfLeaves !=0)
+                    shoutBox.AppendText("Broken mandarine, nr of leaves: " + nrOfLeaves.ToString() + "\n");
+
+                //Contour<Point> contours = imgProcessing.FindContours();
+                //imProcessedView.Image = imgProcessing.Draw(, new Bgr(Color.Red), 3);
             }
             catch (NullReferenceException)
             {
                 imProcessedView.Image = null;
             }
             
+        }
+
+        void doKMeansProcessing()
+        {
+            Image<Bgr, float> imgProcessing;
+
+            try
+            {
+                imgProcessing = segmentColors(imgOriginal);
+                //imgOriginal.Draw(imgProcessing.FindContours(), new Bgr(Color.Green), 3);
+                imProcessedView.Image = imgProcessing;
+                //imProcessedView.Image = distinguishObjects(imgProcessing);
+            }
+            catch (NullReferenceException)
+            {
+                imProcessedView.Image = null;
+            }
+
         }
 
         private void button3_Click(object sender, EventArgs e)
@@ -137,6 +167,45 @@ namespace MandarineCheck
 
         }
 
+        private int countLeafContours(Image<Gray, byte> imgToProcess)
+        {
+            if (imgToProcess == null) return -1;
+            Contour<Point> maxCont;
+            int nrOfContours = 0;
+            //looking for contours on the image
+            maxCont = findContours(imgToProcess);
+
+            //imgToProcess.ROI = maxCont.BoundingRectangle;
+
+            Contour<Point> contours = imgToProcess.FindContours();
+
+            try
+            {
+                while (contours != null)
+                {
+                    Contour<Point> currentContour = contours.ApproxPoly(2.0);
+
+                    if ((currentContour.BoundingRectangle.Height > 15) && (currentContour.BoundingRectangle.Width < 50))
+                    {
+                        nrOfContours++;
+                        //CvInvoke.cvDrawContours(imgToProcess, contours, new MCvScalar(255), new MCvScalar(255), -1, 2, Emgu.CV.CvEnum.LINE_TYPE.EIGHT_CONNECTED, new Point(0, 0));
+
+                        //Drawing found contours
+                        //imgOriginal.ROI = imgToProcess.ROI;
+                        //imgOriginal.Draw(currentContour.BoundingRectangle, new Bgr(Color.Blue), 3);
+                    }
+                    contours = contours.HNext;
+                }
+            }
+            catch (NullReferenceException)
+            {
+                return -1;
+            }
+
+            return nrOfContours;
+        }
+
+
         /// <summary>
         /// Function to distinguish between mandarines and other objects
         /// </summary>
@@ -148,7 +217,6 @@ namespace MandarineCheck
             Double circularity;
 
             if (imgToProcess == null) return null;
-
             //looking for contours on the image
             maxCont = findContours(imgToProcess);
 
@@ -157,10 +225,14 @@ namespace MandarineCheck
 
             //setting the region of the interest to the bounding rectangle
             imgToProcess.ROI = maxCont.BoundingRectangle;
+            
             circularity = maxCont.Area*4*Math.PI/(Math.Pow(maxCont.Perimeter, 2));
 
             //checking circularity
             shoutBox.AppendText((circularity).ToString() + "\n");
+
+            //counting leafs
+            
             if (circularity > 0.79)
             {
                 shoutBox.AppendText("Mandarine!!!\n");
@@ -204,6 +276,59 @@ namespace MandarineCheck
             imagePreProcessed._SmoothGaussian(3);
 
             return imagePreProcessed;            
+        }
+
+        private Image<Bgr, float> segmentColors(Image<Bgr, byte> imgToProcess)
+        {
+            Bgr[] clusterColors = new Bgr[]
+            {
+                    new Bgr(255, 255, 255),
+                    new Bgr(0,128,255),
+                    new Bgr(255, 100, 100),
+                    new Bgr(255,0,255),
+                    new Bgr(133,0,99),
+                    new Bgr(130,12,49),
+                    new Bgr(0, 255, 255)
+            };
+
+            int minV = trackBar1.Value, minH = trackBar3.Value, minS = trackBar2.Value;
+            int maxV = trackBar4.Value, maxH = trackBar6.Value, maxS = trackBar5.Value;
+
+            int cannyThresh = trackBar7.Value;
+            int circleAccum = trackBar8.Value, threshLink = trackBar9.Value;
+
+            Image<Bgr, Byte> imagePreProcessed;
+            if (imgToProcess == null) return null;
+
+            //imagePreProcessed = imgToProcess.PyrDown().PyrUp();
+            imagePreProcessed = imgToProcess;
+
+            Matrix<float> samples = new Matrix<float>(imagePreProcessed.Rows * imagePreProcessed.Cols, 1, 3);
+            Matrix<int> finalClusters = new Matrix<int>(imagePreProcessed.Rows * imagePreProcessed.Cols, 1);
+            int clusterCount = 2; 
+            for (int y = 0; y < imagePreProcessed.Rows; y++)
+            {
+                for (int x = 0; x < imagePreProcessed.Cols; x++)
+                {                    
+                    samples.Data[y + x * imagePreProcessed.Rows, 0] = (float)imagePreProcessed[y, x].Blue;
+                    samples.Data[y + x * imagePreProcessed.Rows, 1] = (float)imagePreProcessed[y, x].Green;
+                    samples.Data[y + x * imagePreProcessed.Rows, 2] = (float)imagePreProcessed[y, x].Red;
+                }
+            }
+            MCvTermCriteria crit = new MCvTermCriteria(5);
+
+            CvInvoke.cvKMeans2(samples, clusterCount, finalClusters, crit, 3, IntPtr.Zero, KMeansInitType.PPCenters, IntPtr.Zero, IntPtr.Zero);
+            Image<Bgr, float> new_image = new Image<Bgr, float>(imagePreProcessed.Size);
+
+            for (int y = 0; y < imagePreProcessed.Rows; y++)
+            {
+                for (int x = 0; x < imagePreProcessed.Cols; x++)
+                {
+                    PointF p = new PointF(x, y);
+                    new_image.Draw(new CircleF(p, 1.0f), clusterColors[finalClusters[y + x * imagePreProcessed.Rows, 0]], 1);
+                }
+            }
+            return new_image;
         }
 
         /// <summary>
@@ -303,6 +428,16 @@ namespace MandarineCheck
                 }
 
             }
+        }
+
+        private void tableLayoutPanel2_Paint(object sender, PaintEventArgs e)
+        {
+
+        }
+
+        private void tableLayoutPanel3_Paint(object sender, PaintEventArgs e)
+        {
+
         }
 
     }
